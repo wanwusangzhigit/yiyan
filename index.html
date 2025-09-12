@@ -60,22 +60,11 @@
     <div class="login-section" id="loginSec">
       <form class="login-form" id="loginForm">
         <div class="form-group">
-          <label>GitHub Token（需repo权限）</label>
-          <input type="password" id="token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" required>
-        </div>
-        <div class="form-group">
-          <label>仓库名（格式：用户/仓库）</label>
-          <input type="text" id="repo" placeholder="如：yourname/class-points" required>
-        </div>
-        <div class="form-group">
-          <label>本地教师密码</label>
-          <input type="password" id="pwd" placeholder="设置本地密码" required>
+          <label>教师密码</label>
+          <input type="password" id="pwdInput" placeholder="请输入密码（如 1026）" required>
         </div>
         <button class="btn btn-primary">🔐 登录</button>
       </form>
-      <div style="margin-top:20px;font-size:14px;color:#666">
-        首次使用：注册GitHub → 新建仓库 → Settings → Developer settings → Personal access tokens → Generate new token（勾选repo）→ 复制Token
-      </div>
     </div>
 
     <!-- 主界面 -->
@@ -117,39 +106,35 @@
 
   <script>
     /* ====== 基础变量 ====== */
-    let token='',repo='',pwd='',students=[],logged=0,modalAct='';
+    let token='',repo='',students=[],logged=0,sha=null;
 
     /* ====== 编码/解码 ====== */
-    function enc(b64){return btoa(unescape(encodeURIComponent(b64)))}
-    function dec(uni){return decodeURIComponent(escape(atob(uni)))}
+    function enc(str){return btoa(unescape(encodeURIComponent(str)))}
+    function dec(b64){return decodeURIComponent(escape(atob(b64)))}
 
-    /* ====== 登录 ====== */
+    /* ====== 登录（仅密码→Worker） ====== */
     document.getElementById('loginForm').addEventListener('submit',async(e)=>{
       e.preventDefault();
-      token=document.getElementById('token').value.trim();
-      repo=document.getElementById('repo').value.trim();
-      pwd=document.getElementById('pwd').value.trim();
-      if(!token||!repo||!pwd)return toast('请完整填写','error');
-      if(!repo.includes('/'))return toast('仓库格式错误','error');
+      const pwd=document.getElementById('pwdInput').value.trim();
+      if(!pwd)return toast('请输入密码','error');
       try{
-        const r=await fetch(`https://api.github.com/repos/${repo}/contents/points.json`,{
-          headers:{Authorization:`token ${token}`,Accept:'application/vnd.github.v3+json'}
+        const res=await fetch('https://val.13818403352.workers.dev',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({pwd})
         });
-        if(r.status===404){
-          await save();   // 初始化文件
-        }else if(!r.ok)throw new Error('Token或仓库错误');
-        logged=1;
-        localStorage.setItem('tk',token); localStorage.setItem('rp',repo); localStorage.setItem('pd',pwd);
-        toggleSec();
-        await load();
-        toast('登录成功','success');
+        const data=await res.json();
+        if(!data.ok)return toast('密码错误','error');
+        token=data.token; repo=data.repo;
+        localStorage.setItem('tk',token); localStorage.setItem('rp',repo);
+        logged=1; toggleSec(); await load(); toast('登录成功','success');
       }catch(err){toast('连接失败：'+err.message,'error')}
     });
 
     /* ====== 退出 ====== */
     document.getElementById('logoutBtn').onclick=()=>{
       if(!confirm('确定退出？'))return;
-      logged=0; ['tk','rp','pd'].forEach(k=>localStorage.removeItem(k));
+      logged=0; ['tk','rp'].forEach(k=>localStorage.removeItem(k));
       location.reload();
     };
 
@@ -163,37 +148,30 @@
     /* ====== 加载数据 ====== */
     async function load(){
       try{
-        const r=await fetch(`https://api.github.com/repos/${repo}/contents/points.json`,{
-          headers:{Authorization:`token ${token}`}
-        });
-        if(r.ok){
-          const js=await r.json();
-          students=JSON.parse(dec(js.content)).students||[];
-          sha=js.sha;
-        }else if(r.status===404){
-          students=[]; sha=null;
-        }else throw new Error('加载失败');
+        const repoInfo=await(await fetch(`https://api.github.com/repos/${repo}`,{headers:{Authorization:`token ${token}`}})).json();
+        const branch=repoInfo.default_branch||'main';
+        const r=await fetch(`https://api.github.com/repos/${repo}/contents/points.json?ref=${branch}`,{headers:{Authorization:`token ${token}`}});
+        if(r.ok){const j=await r.json(); students=JSON.parse(dec(j.content)).students||[]; sha=j.sha;}
+        else if(r.status===404){students=[]; sha=null;}
+        else throw new Error('加载失败');
         render(); rank(); stats();
       }catch(err){toast('加载失败：'+err.message,'error')}
     }
 
     /* ====== 保存数据 ====== */
     async function save(){
-      const body={
-        message:'update '+new Date().toLocaleString('zh-CN'),
-        content:enc(JSON.stringify({students,updated:new Date().toISOString()},null,2)),
-        sha
-      };
-      const r=await fetch(`https://api.github.com/repos/${repo}/contents/points.json`,{
-        method:'PUT',
-        headers:{Authorization:`token ${token}`,'Content-Type':'application/json'},
-        body:JSON.stringify(body)
-      });
-      if(!r.ok)throw new Error('保存失败');
-      const j=await r.json(); sha=j.sha;
+      const repoInfo=await(await fetch(`https://api.github.com/repos/${repo}`,{headers:{Authorization:`token ${token}`}})).json();
+      const branch=repoInfo.default_branch||'main';
+      let sha=null;
+      const get=await fetch(`https://api.github.com/repos/${repo}/contents/points.json?ref=${branch}`,{headers:{Authorization:`token ${token}`}});
+      if(get.ok)sha=(await get.json()).sha; else if(get.status!==404)throw new Error('获取SHA失败');
+      const body={message:'update '+new Date().toLocaleString('zh-CN'), content:enc(JSON.stringify({students,updated:new Date().toISOString()},null,2)), branch, sha};
+      const put=await fetch(`https://api.github.com/repos/${repo}/contents/points.json`,{method:'PUT', headers:{Authorization:`token ${token}`,'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      if(!put.ok)throw new Error('保存失败');
+      sha=(await put.json()).content.sha;
     }
 
-    /* ====== 渲染学生 ====== */
+    /* ====== 渲染 ====== */
     function render(list=students){
       const g=document.getElementById('grid');
       g.innerHTML=list.map(s=>`
@@ -218,11 +196,9 @@
     window.chg=(id,d)=>{
       const s=students.find(x=>x.id===id);
       if(!s)return;
-      s.score=Math.max(0,s.score+d);
-      s.lastUp=new Date().toISOString();
-      render(); rank(); stats();
-      sync();
-      toast(`${s.name} ${d>0?'+':''}${d} 分`); 
+      s.score=Math.max(0,s.score+d); s.lastUp=new Date().toISOString();
+      render(); rank(); stats(); sync();
+      toast(`${s.name} ${d>0?'+':''}${d} 分`);
     };
     window.setC=id=>{
       const v=parseInt(document.getElementById('c'+id).value);
@@ -300,12 +276,6 @@
       bar.textContent=msg; bar.className='status-bar show '+type;
       setTimeout(()=>bar.classList.remove('show'),2500);
     }
-
-    /* ====== 自动填充 ====== */
-    window.onload=()=>{
-      const t=localStorage.getItem('tk'),r=localStorage.getItem('rp'),p=localStorage.getItem('pd');
-      if(t&&r&&p){document.getElementById('token').value=t;document.getElementById('repo').value=r;document.getElementById('pwd').value=p;}
-    };
   </script>
 </body>
 </html>
