@@ -118,7 +118,7 @@
       const pwd=document.getElementById('pwdInput').value.trim();
       if(!pwd)return toast('请输入密码','error');
       try{
-        const res=await fetch('https://val.13818403352.workers.dev',{
+        const res=await fetch('https://val.api.wanwusangzhi.top',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({pwd})
